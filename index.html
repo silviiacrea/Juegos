@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CruzaPalabras Online</title>
     
+    <!-- Polyfill para arrastrar fichas suavemente en móviles -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+
     <!-- Estilos (Tailwind CSS) -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -14,11 +18,20 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
-        .tile-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+        body { font-family: 'Inter', sans-serif; background-color: #12121a; color: #e2e8f0; }
+        .tile-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3); }
+        /* Evitar scroll al arrastrar en móviles */
+        .drag-active { touch-action: none; }
     </style>
 </head>
 <body>
+    <script>
+        // Inicializar el arrastre para pantallas táctiles
+        MobileDragDrop.polyfill({
+            dragImageTranslateOverride: MobileDragDrop.scrollBehaviourDragImageTranslateOverride
+        });
+        window.addEventListener('touchmove', function() {}, {passive: false});
+    </script>
     <div id="root"></div>
 
     <!-- Módulo de Firebase -->
@@ -209,20 +222,24 @@
         }
 
         // --- COMPONENTE FICHA ---
-        const Tile = ({ char, val, onClick, selected, isBoard, isNew }) => (
-            <div onClick={onClick} className={`
+        const Tile = ({ char, val, onClick, selected, isBoard, isNew, draggable, onDragStart }) => (
+            <div 
+                draggable={draggable}
+                onDragStart={onDragStart}
+                onClick={onClick} 
+                className={`
                 ${isBoard ? 'w-full h-full text-[10px] sm:text-xs' : 'w-10 h-10 sm:w-12 sm:h-12 text-lg sm:text-xl'}
                 relative rounded flex items-center justify-center cursor-pointer select-none transition-transform
                 ${selected ? 'ring-4 ring-blue-500 scale-110 z-10 shadow-lg' : 'tile-shadow'}
-                ${isNew ? 'bg-yellow-100 border-b-[3px] border-r-[3px] border-yellow-300' : 'bg-amber-50 border-b-[3px] border-r-[3px] border-amber-200'}
+                ${isNew ? 'bg-[#e0c38c] border-b-[3px] border-r-[3px] border-[#c2a671] text-[#2c1c14]' : 'bg-[#d2b48c] border-b-[3px] border-r-[3px] border-[#b59975] text-[#3e2723]'}
             `}>
-                <span className="font-black text-gray-800">{val === 0 ? (char !== '*' ? char : '') : char}</span>
-                {val > 0 && <span className={`absolute bottom-0 right-0.5 font-bold text-gray-600 ${isBoard ? 'text-[7px]' : 'text-[10px]'}`}>{val}</span>}
+                <span className="font-black">{val === 0 ? (char !== '*' ? char : '') : char}</span>
+                {val > 0 && <span className={`absolute bottom-0 right-0.5 font-bold opacity-75 ${isBoard ? 'text-[7px]' : 'text-[10px]'}`}>{val}</span>}
             </div>
         );
 
         // --- LÓGICA DE TABLERO Y MULTIJUGADOR ---
-        function GameBoard({ roomId, user, goHome }) {
+        function GameBoard({ roomId, user, goHome, playerName }) {
             const [roomData, setRoomData] = useState(null);
             const [placedTiles, setPlacedTiles] = useState([]);
             const [selectedTileId, setSelectedTileId] = useState(null);
@@ -230,6 +247,7 @@
             const [rackOrder, setRackOrder] = useState([]);
             const [playValidation, setPlayValidation] = useState({ score: 0, valid: false, text: '', error: '' });
             const [shufflesLeft, setShufflesLeft] = useState(3);
+            const [zoom, setZoom] = useState(1);
             const { doc, updateDoc, onSnapshot } = window.FirebaseAPI;
 
             // Reiniciar contador de mezclas al cambiar de turno
@@ -260,7 +278,7 @@
                             const myRack = allBag.splice(0, 7);
                             await updateDoc(roomRef, {
                                 status: 'playing', playerUids: [...data.playerUids, user.uid],
-                                [`players.${user.uid}`]: { name: "Jugador 2", score: 0, rack: myRack },
+                                [`players.${user.uid}`]: { name: playerName || "Jugador 2", score: 0, rack: myRack },
                                 bag: allBag
                             });
                         } else {
@@ -313,6 +331,45 @@
                 setSelectedTileId(null); setPendingBlank(null);
             };
 
+            // --- Lógica de Arrastrar y Soltar (Drag & Drop) ---
+            const handleDragStart = (e, tileId, fromIndex = "") => {
+                e.dataTransfer.setData('tileId', tileId);
+                e.dataTransfer.setData('fromIndex', fromIndex);
+            };
+
+            const handleDrop = (e, index) => {
+                e.preventDefault();
+                if (pendingBlank || !isMyTurn) return;
+                const tileId = e.dataTransfer.getData('tileId');
+                const fromIndex = e.dataTransfer.getData('fromIndex');
+                
+                const committed = roomData.board[index];
+                const placedIdx = placedTiles.findIndex(t => t.index === index);
+                if (committed || placedIdx !== -1) return; // Casilla ocupada
+
+                if (fromIndex !== "") {
+                    // Mover ficha ya colocada
+                    setPlacedTiles(prev => prev.map(t => t.id === tileId ? { ...t, index } : t));
+                } else {
+                    // Mover ficha desde el atril
+                    const tile = myData.rack.find(t => t.id === tileId);
+                    if (!tile) return;
+                    if (tile.val === 0) { setPendingBlank({ id: tile.id, index }); return; }
+                    setPlacedTiles(prev => [...prev, { id: tile.id, index, char: tile.char, val: tile.val }]);
+                }
+                setSelectedTileId(null);
+            };
+
+            const handleRackDrop = (e) => {
+                e.preventDefault();
+                const tileId = e.dataTransfer.getData('tileId');
+                const fromIndex = e.dataTransfer.getData('fromIndex');
+                if (fromIndex !== "") {
+                    // Devolver ficha al atril
+                    setPlacedTiles(prev => prev.filter(t => t.id !== tileId));
+                }
+            };
+
             const copyInvite = () => {
                 const url = `${window.location.origin}${window.location.pathname}#${roomId}`;
                 navigator.clipboard.writeText(url).then(() => alert("¡Enlace copiado! Pásaselo a tu amigo.")).catch(() => alert("Copia este código y dáselo a tu amigo: " + roomId));
@@ -353,61 +410,80 @@
             };
 
             return (
-                <div className="flex flex-col h-screen bg-slate-50 text-slate-800">
-                    {/* Cabecera Puntos */}
-                    <div className="flex justify-between items-center bg-white px-4 py-3 shadow z-10 shrink-0">
-                        <div className={`text-center ${isMyTurn ? 'text-green-600 font-bold' : 'text-slate-400'}`}>
-                            <div className="text-xs">TÚ</div>
+                <div className="flex flex-col h-screen bg-[#12121a] text-slate-200 font-sans">
+                    {/* Cabecera Puntos (Dark Cozy) */}
+                    <div className="flex justify-between items-center bg-[#1e1e28] px-4 py-3 shadow-md z-10 shrink-0 border-b border-[#2b2b36]">
+                        <div className={`text-center ${isMyTurn ? 'text-green-400 font-bold' : 'text-slate-500'}`}>
+                            <div className="text-xs uppercase tracking-wide">{myData.name || "TÚ"}</div>
                             <div className="text-2xl leading-none">{myData.score}</div>
                         </div>
-                        <div className="flex flex-col items-center bg-slate-100 rounded-full px-4 py-1">
+                        <div className="flex flex-col items-center bg-[#2b2b36] rounded-full px-4 py-1 border border-[#3b3b4a]">
                             <span className="text-[10px] font-bold text-slate-400">LETRAS</span>
-                            <span className="text-sm font-black">{roomData.bag.length}</span>
+                            <span className="text-sm font-black text-slate-200">{roomData.bag.length}</span>
                         </div>
                         {oppData ? (
-                            <div className={`text-center ${!isMyTurn ? 'text-green-600 font-bold' : 'text-slate-400'}`}>
-                                <div className="text-xs">AMIGO</div>
+                            <div className={`text-center ${!isMyTurn ? 'text-green-400 font-bold' : 'text-slate-500'}`}>
+                                <div className="text-xs uppercase tracking-wide">{oppData.name || "AMIGO"}</div>
                                 <div className="text-2xl leading-none">{oppData.score}</div>
                             </div>
                         ) : (
-                            <div className="text-xs text-slate-400 w-16 text-center">Esperando...</div>
+                            <div className="text-xs text-slate-500 w-16 text-center">Esperando...</div>
                         )}
                     </div>
 
-                    {/* Tablero (Ahora permite Zoom y Desplazamiento) */}
-                    <div className="flex-1 flex overflow-auto bg-[#e2e8f0] p-4 relative items-start justify-center">
-                        <div className="w-[800px] h-[800px] sm:w-[600px] sm:h-[600px] shrink-0 grid bg-[#f1f5f9] border border-slate-300 shadow-xl rounded-sm" style={{ gridTemplateColumns: 'repeat(15, 1fr)' }}>
-                            {Array(225).fill(null).map((_, i) => {
-                                const type = BOARD_LAYOUT[Math.floor(i / 15)][i % 15];
-                                
-                                // Colores suavizados "anti-vértigo"
-                                let bg = 'bg-[#f8fafc] border border-slate-200/60';
-                                if (type === 'TW') bg = 'bg-red-400/60 border-red-500/40';
-                                if (type === 'DW' || type === '★') bg = 'bg-pink-300/60 border-pink-400/40';
-                                if (type === 'TL') bg = 'bg-blue-400/60 border-blue-500/40';
-                                if (type === 'DL') bg = 'bg-cyan-200/60 border-cyan-300/40';
+                    {/* Tablero (Zoom y Drag/Drop) */}
+                    <div className="flex-1 flex flex-col relative bg-[#1a1a24] overflow-hidden">
+                        
+                        {/* Botones de Zoom */}
+                        <div className="absolute right-4 top-4 flex flex-col gap-2 z-40 bg-[#1e1e28] p-1 rounded-lg border border-[#2b2b36] shadow-lg">
+                            <button onClick={() => setZoom(z => Math.min(z + 0.3, 2))} className="w-10 h-10 flex items-center justify-center text-xl font-bold hover:bg-[#2b2b36] rounded text-slate-300 transition">+</button>
+                            <div className="h-px bg-[#2b2b36] w-full"></div>
+                            <button onClick={() => setZoom(z => Math.max(z - 0.3, 0.5))} className="w-10 h-10 flex items-center justify-center text-xl font-bold hover:bg-[#2b2b36] rounded text-slate-300 transition">-</button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-auto p-4 flex items-center justify-center">
+                            <div 
+                                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.15s ease-out' }}
+                                className="w-[800px] h-[800px] sm:w-[600px] sm:h-[600px] shrink-0 grid bg-[#242430] border border-[#3b3b4a] shadow-2xl rounded-sm" 
+                            >
+                                {Array(225).fill(null).map((_, i) => {
+                                    const type = BOARD_LAYOUT[Math.floor(i / 15)][i % 15];
+                                    
+                                    // Colores acogedores para multiplicadores
+                                    let bg = 'bg-[#2b2b36] border border-[#353544]';
+                                    if (type === 'TW') bg = 'bg-[#63323a] border-[#7a424b]';
+                                    if (type === 'DW' || type === '★') bg = 'bg-[#5c3c54] border-[#714d68]';
+                                    if (type === 'TL') bg = 'bg-[#2d4659] border-[#3a586e]';
+                                    if (type === 'DL') bg = 'bg-[#2c5246] border-[#376356]';
 
-                                const committed = roomData.board[i];
-                                const placed = placedTiles.find(t => t.index === i);
+                                    const committed = roomData.board[i];
+                                    const placed = placedTiles.find(t => t.index === i);
 
-                                return (
-                                    <div key={i} className={`flex justify-center items-center relative ${bg}`} onClick={() => handleCellClick(i)}>
-                                        {!committed && !placed && type !== '.' && <span className="text-[10px] font-bold text-black/20 select-none">{type}</span>}
-                                        {committed && <Tile char={committed.char} val={committed.val} isBoard />}
-                                        {placed && <Tile char={placed.char} val={placed.val} isBoard isNew />}
-                                    </div>
-                                );
-                            })}
+                                    return (
+                                        <div 
+                                            key={i} 
+                                            className={`flex justify-center items-center relative ${bg}`} 
+                                            onClick={() => handleCellClick(i)}
+                                            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                                            onDrop={(e) => handleDrop(e, i)}
+                                        >
+                                            {!committed && !placed && type !== '.' && <span className="text-[10px] font-bold text-white/10 select-none">{type}</span>}
+                                            {committed && <Tile char={committed.char} val={committed.val} isBoard />}
+                                            {placed && <Tile char={placed.char} val={placed.val} isBoard isNew draggable={isMyTurn} onDragStart={(e) => handleDragStart(e, placed.id, placed.index)} />}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                         
                         {/* Selector Comodín */}
                         {pendingBlank && (
-                            <div className="absolute inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-                                <div className="bg-white p-4 rounded-xl w-full max-w-sm">
-                                    <h3 className="text-center font-bold mb-4">Elige letra para el comodín</h3>
+                            <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+                                <div className="bg-[#1e1e28] border border-[#3b3b4a] p-4 rounded-xl w-full max-w-sm">
+                                    <h3 className="text-center font-bold mb-4 text-slate-200">Elige letra para el comodín</h3>
                                     <div className="flex flex-wrap gap-2 justify-center">
                                         {"ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split('').map(c => (
-                                            <button key={c} onClick={() => resolveBlank(c)} className="w-10 h-10 bg-amber-100 rounded font-bold">{c}</button>
+                                            <button key={c} onClick={() => resolveBlank(c)} className="w-10 h-10 bg-[#3b3b4a] hover:bg-[#4a4a5c] text-white rounded font-bold transition">{c}</button>
                                         ))}
                                     </div>
                                 </div>
@@ -415,10 +491,14 @@
                         )}
                     </div>
 
-                    {/* Controles y Atril */}
-                    <div className="bg-slate-800 p-4 pb-6 shrink-0 rounded-t-2xl shadow-[0_-5px_15px_rgba(0,0,0,0.2)] z-20">
+                    {/* Controles y Atril (Dark Cozy) */}
+                    <div 
+                        className="bg-[#1a1a24] p-4 pb-6 shrink-0 rounded-t-2xl shadow-[0_-5px_15px_rgba(0,0,0,0.5)] z-20 border-t border-[#2b2b36]"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleRackDrop}
+                    >
                         {!oppData && (
-                            <button onClick={copyInvite} className="w-full mb-4 bg-blue-600/20 border border-blue-500 text-blue-300 py-2 rounded-lg font-bold">
+                            <button onClick={copyInvite} className="w-full mb-4 bg-[#2d4659] border border-[#3a586e] hover:bg-[#3a586e] text-blue-200 py-2 rounded-lg font-bold shadow-lg transition">
                                 📋 Copiar Enlace de Invitación
                             </button>
                         )}
@@ -428,7 +508,7 @@
                             <span className="text-red-400 font-bold">{playValidation.error ? playValidation.error : ''}</span>
                             {!playValidation.error && playValidation.text && (
                                 <>
-                                    <span className="text-slate-300">Palabra: <span className="text-white font-bold">{playValidation.text}</span></span>
+                                    <span className="text-slate-400">Palabra: <span className="text-white font-bold">{playValidation.text}</span></span>
                                     <span className="text-green-400 font-black text-lg">+{playValidation.score} pts</span>
                                 </>
                             )}
@@ -436,10 +516,16 @@
                         
                         <div className="flex justify-center gap-1 sm:gap-2 mb-4 h-12">
                             {availableRack.map(t => (
-                                <Tile key={t.id} char={t.val===0?'*':t.char} val={t.val} onClick={() => setSelectedTileId(prev => prev === t.id ? null : t.id)} selected={selectedTileId === t.id} />
+                                <Tile 
+                                    key={t.id} char={t.val===0?'*':t.char} val={t.val} 
+                                    onClick={() => setSelectedTileId(prev => prev === t.id ? null : t.id)} 
+                                    selected={selectedTileId === t.id}
+                                    draggable={isMyTurn}
+                                    onDragStart={(e) => handleDragStart(e, t.id)}
+                                />
                             ))}
                             {Array(7 - availableRack.length).fill(0).map((_, i) => (
-                                <div key={i} className="w-10 h-10 sm:w-12 sm:h-12 bg-white/10 rounded border border-white/5" />
+                                <div key={i} className="w-10 h-10 sm:w-12 sm:h-12 bg-[#2b2b36] rounded border border-[#3b3b4a] shadow-inner" />
                             ))}
                         </div>
                         
@@ -449,17 +535,17 @@
                                     setRackOrder(prev => [...prev].sort(() => Math.random() - 0.5));
                                     setShufflesLeft(prev => prev - 1);
                                 }
-                            }} disabled={shufflesLeft === 0} className="flex-1 bg-slate-600 disabled:bg-slate-800 disabled:opacity-50 text-white rounded-xl p-2 flex flex-col items-center justify-center leading-none" title="Mezclar Atril">
+                            }} disabled={shufflesLeft === 0} className="flex-1 bg-[#2b2b36] hover:bg-[#3b3b4a] border border-[#3b3b4a] disabled:opacity-30 text-slate-300 rounded-xl p-2 flex flex-col items-center justify-center leading-none transition" title="Mezclar Atril">
                                 <span className="text-lg">🔀</span>
                                 <span className="text-[10px] mt-1 font-bold">({shufflesLeft})</span>
                             </button>
-                            <button onClick={() => setPlacedTiles([])} className="flex-1 bg-slate-600 text-white rounded-xl p-2 flex justify-center items-center text-lg" title="Recuperar fichas del tablero">
+                            <button onClick={() => setPlacedTiles([])} className="flex-1 bg-[#2b2b36] hover:bg-[#3b3b4a] border border-[#3b3b4a] text-slate-300 rounded-xl p-2 flex justify-center items-center text-lg transition" title="Recuperar fichas del tablero">
                                 🔄
                             </button>
-                            <button onClick={handlePass} disabled={!isMyTurn} className="flex-1 bg-amber-500 disabled:bg-slate-700 text-white font-bold rounded-xl p-2 text-xs sm:text-sm transition shadow-md">
+                            <button onClick={handlePass} disabled={!isMyTurn} className="flex-1 bg-[#7a4b3b] hover:bg-[#8a5b4b] disabled:opacity-30 disabled:bg-[#3b3b4a] text-[#f8e4cc] font-bold rounded-xl p-2 text-xs sm:text-sm transition shadow-md border border-[#8a5b4b]">
                                 PASAR
                             </button>
-                            <button onClick={handlePlay} disabled={!isMyTurn || placedTiles.length === 0} className="flex-[2] bg-green-500 disabled:bg-slate-700 text-white font-black rounded-xl p-2 uppercase tracking-wide text-xs sm:text-sm transition shadow-md">
+                            <button onClick={handlePlay} disabled={!isMyTurn || placedTiles.length === 0} className="flex-[2] bg-[#2c5246] hover:bg-[#376356] disabled:opacity-30 disabled:bg-[#3b3b4a] text-[#cceae0] font-black rounded-xl p-2 uppercase tracking-wide text-xs sm:text-sm transition shadow-md border border-[#376356]">
                                 JUGAR ▶️
                             </button>
                         </div>
@@ -474,6 +560,12 @@
             const [user, setUser] = useState(null);
             const [roomId, setRoomId] = useState(window.location.hash.slice(1));
             const [joinCode, setJoinCode] = useState('');
+            const [playerName, setPlayerName] = useState(localStorage.getItem('cruzapalabras_name') || '');
+
+            const updatePlayerName = (name) => {
+                setPlayerName(name);
+                localStorage.setItem('cruzapalabras_name', name);
+            };
 
             useEffect(() => {
                 const init = () => {
@@ -497,6 +589,8 @@
 
             const createRoom = async () => {
                 if (!user) return alert("Conectando...");
+                if (!playerName.trim()) return alert("Por favor, escribe tu nombre primero.");
+                
                 const { doc, setDoc } = window.FirebaseAPI;
                 const code = Math.random().toString(36).substring(2, 7).toUpperCase();
                 const bag = createBag();
@@ -504,34 +598,45 @@
                 await setDoc(doc(db, 'rooms', code), {
                     id: code, status: 'waiting', playerUids: [user.uid], turnUid: user.uid,
                     board: Array(225).fill(null), bag: bag,
-                    players: { [user.uid]: { name: "Jugador 1", score: 0, rack: myRack } }
+                    players: { [user.uid]: { name: playerName, score: 0, rack: myRack } }
                 });
                 window.location.hash = code;
             };
 
-            if (!firebaseReady) return <div className="h-screen flex items-center justify-center font-bold text-slate-500">Cargando sistema...</div>;
-            if (roomId) return <GameBoard roomId={roomId} user={user} goHome={() => window.location.hash = ''} />;
+            if (!firebaseReady) return <div className="h-screen flex items-center justify-center font-bold text-slate-500 bg-[#12121a]">Cargando sistema...</div>;
+            if (roomId) return <GameBoard roomId={roomId} user={user} goHome={() => window.location.hash = ''} playerName={playerName} />;
 
             return (
-                <div className="h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-blue-50 to-indigo-100">
-                    <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-sm text-center">
-                        <h1 className="text-4xl font-black text-blue-600 mb-8">CruzaPalabras</h1>
+                <div className="h-screen flex flex-col items-center justify-center p-6 bg-[#12121a]">
+                    <div className="bg-[#1e1e28] border border-[#2b2b36] p-8 rounded-3xl shadow-2xl w-full max-w-sm text-center">
+                        <h1 className="text-4xl font-black text-[#89b4fa] mb-8 drop-shadow-md">CruzaPalabras</h1>
                         
-                        <button onClick={createRoom} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg mb-6 transition">
+                        <div className="mb-6 text-left">
+                            <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Tu Nombre</label>
+                            <input 
+                                value={playerName} onChange={e => updatePlayerName(e.target.value)}
+                                placeholder="Ej. Carlos" className="w-full bg-[#12121a] border border-[#3b3b4a] rounded-xl px-4 py-3 font-bold text-slate-200 outline-none focus:border-[#89b4fa] transition"
+                            />
+                        </div>
+
+                        <button onClick={createRoom} className="w-full bg-[#2d4659] hover:bg-[#3a586e] text-blue-100 font-bold py-4 rounded-xl shadow-lg mb-6 transition border border-[#4a687e]">
                             Crear Partida Nueva
                         </button>
                         
                         <div className="flex items-center gap-2 mb-6">
-                            <div className="h-px bg-slate-200 flex-1"></div>
-                            <span className="text-xs font-bold text-slate-400">O ÚNETE CON UN CÓDIGO</span>
-                            <div className="h-px bg-slate-200 flex-1"></div>
+                            <div className="h-px bg-[#2b2b36] flex-1"></div>
+                            <span className="text-xs font-bold text-slate-500">O ÚNETE CON UN CÓDIGO</span>
+                            <div className="h-px bg-[#2b2b36] flex-1"></div>
                         </div>
 
                         <input 
                             value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} maxLength={5}
-                            placeholder="Ej. X5TZ" className="w-full text-center bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3 font-black text-2xl mb-3 outline-none"
+                            placeholder="Ej. X5TZ" className="w-full text-center bg-[#12121a] border border-[#3b3b4a] focus:border-[#a6e3a1] rounded-xl px-4 py-3 font-black text-2xl mb-3 outline-none text-slate-200 transition"
                         />
-                        <button onClick={() => { if(joinCode) window.location.hash = joinCode; }} disabled={!joinCode} className="w-full bg-slate-800 disabled:bg-slate-400 text-white font-bold py-4 rounded-xl transition">
+                        <button onClick={() => { 
+                            if(!playerName.trim()) return alert("Por favor, escribe tu nombre primero.");
+                            if(joinCode) window.location.hash = joinCode; 
+                        }} disabled={!joinCode} className="w-full bg-[#2c5246] hover:bg-[#376356] disabled:bg-[#2b2b36] disabled:text-slate-500 disabled:border-[#3b3b4a] text-[#cceae0] font-bold py-4 rounded-xl transition border border-[#376356]">
                             Entrar a la sala
                         </button>
                     </div>

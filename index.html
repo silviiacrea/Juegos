@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CruzaPalabras Online</title>
+    
+    <!-- Estilos (Tailwind CSS) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React y Babel para que funcione en un solo archivo -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .tile-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Módulo de Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Exponemos Firebase a React
+        window.FirebaseAPI = {
+            initializeApp, getAuth, signInAnonymously, onAuthStateChanged,
+            getFirestore, doc, setDoc, updateDoc, onSnapshot
+        };
+        window.dispatchEvent(new Event('firebase-loaded'));
+    </script>
+
+    <!-- Código del Juego (React) -->
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // ==========================================
+        // 1. CONFIGURACIÓN DE FIREBASE (ZIRVIPALABROS)
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyCpA-yuDPAR77i9b3nv8gw4mfbal7ICOEc",
+            authDomain: "zirvipalabros.firebaseapp.com",
+            projectId: "zirvipalabros",
+            storageBucket: "zirvipalabros.firebasestorage.app",
+            messagingSenderId: "586138495916",
+            appId: "1:586138495916:web:a929055aa735c55a83a809",
+            measurementId: "G-SXG78MD6PK"
+        };
+
+        let app, auth, db;
+
+        // --- CONSTANTES DEL JUEGO ---
+        const SPANISH_LETTERS = {
+            'A': { count: 12, value: 1 }, 'E': { count: 12, value: 1 }, 'O': { count: 9, value: 1 },
+            'I': { count: 6, value: 1 }, 'S': { count: 6, value: 1 }, 'N': { count: 5, value: 1 },
+            'R': { count: 5, value: 1 }, 'U': { count: 5, value: 1 }, 'D': { count: 5, value: 2 },
+            'L': { count: 4, value: 1 }, 'T': { count: 4, value: 1 }, 'C': { count: 4, value: 3 },
+            'B': { count: 2, value: 3 }, 'M': { count: 2, value: 3 }, 'P': { count: 2, value: 3 },
+            'G': { count: 2, value: 2 }, 'H': { count: 2, value: 4 }, 'F': { count: 1, value: 4 },
+            'V': { count: 1, value: 4 }, 'Y': { count: 1, value: 4 }, 'Q': { count: 1, value: 5 },
+            'J': { count: 1, value: 8 }, 'Ñ': { count: 1, value: 8 }, 'X': { count: 1, value: 8 },
+            'Z': { count: 1, value: 10 }, '*': { count: 2, value: 0 }
+        };
+
+        const BOARD_LAYOUT = [
+            ['TW', '.', '.', 'DL', '.', '.', '.', 'TW', '.', '.', '.', 'DL', '.', '.', 'TW'],
+            ['.', 'DW', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'DW', '.'],
+            ['.', '.', 'DW', '.', '.', '.', 'DL', '.', 'DL', '.', '.', '.', 'DW', '.', '.'],
+            ['DL', '.', '.', 'DW', '.', '.', '.', 'DL', '.', '.', '.', 'DW', '.', '.', 'DL'],
+            ['.', '.', '.', '.', 'DW', '.', '.', '.', '.', '.', 'DW', '.', '.', '.', '.'],
+            ['.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.'],
+            ['.', '.', 'DL', '.', '.', '.', 'DL', '.', 'DL', '.', '.', '.', 'DL', '.', '.'],
+            ['TW', '.', '.', 'DL', '.', '.', '.', '★', '.', '.', '.', 'DL', '.', '.', 'TW'],
+            ['.', '.', 'DL', '.', '.', '.', 'DL', '.', 'DL', '.', '.', '.', 'DL', '.', '.'],
+            ['.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.'],
+            ['.', '.', '.', '.', 'DW', '.', '.', '.', '.', '.', 'DW', '.', '.', '.', '.'],
+            ['DL', '.', '.', 'DW', '.', '.', '.', 'DL', '.', '.', '.', 'DW', '.', '.', 'DL'],
+            ['.', '.', 'DW', '.', '.', '.', 'DL', '.', 'DL', '.', '.', '.', 'DW', '.', '.'],
+            ['.', 'DW', '.', '.', '.', 'TL', '.', '.', '.', 'TL', '.', '.', '.', 'DW', '.'],
+            ['TW', '.', '.', 'DL', '.', '.', '.', 'TW', '.', '.', '.', 'DL', '.', '.', 'TW']
+        ];
+
+        const createBag = () => {
+            const bag = [];
+            for (const [letter, data] of Object.entries(SPANISH_LETTERS)) {
+                for (let i = 0; i < data.count; i++) {
+                    bag.push({ id: Math.random().toString(36).substr(2, 9), char: letter, val: data.value });
+                }
+            }
+            return bag.sort(() => Math.random() - 0.5);
+        };
+
+        // --- LÓGICA DE VALIDACIÓN Y PUNTUACIÓN ---
+        const getBoardType = (index) => BOARD_LAYOUT[Math.floor(index / 15)][index % 15];
+
+        function getWordAt(index, dR, dC, mergedBoard, placedSet) {
+            let r = Math.floor(index / 15), c = index % 15;
+            let startR = r, startC = c;
+            while (startR - dR >= 0 && startC - dC >= 0 && startR - dR < 15 && startC - dC < 15 && mergedBoard[(startR - dR) * 15 + (startC - dC)]) {
+                startR -= dR; startC -= dC;
+            }
+            let endR = r, endC = c;
+            while (endR + dR >= 0 && endC + dC >= 0 && endR + dR < 15 && endC + dC < 15 && mergedBoard[(endR + dR) * 15 + (endC + dC)]) {
+                endR += dR; endC += dC;
+            }
+            if (startR === endR && startC === endC) return null;
+            const word = [];
+            let currR = startR, currC = startC;
+            while(true) {
+                const idx = currR * 15 + currC;
+                word.push({ ...mergedBoard[idx], index: idx, isNew: placedSet.has(idx) });
+                if (currR === endR && currC === endC) break;
+                currR += dR; currC += dC;
+            }
+            return word;
+        }
+
+        function validateAndScore(placedTiles, originalBoard) {
+            if (placedTiles.length === 0) return { error: "" };
+            const board = [...originalBoard];
+            const placedSet = new Set();
+            placedTiles.forEach(t => { board[t.index] = { char: t.char, val: t.val }; placedSet.add(t.index); });
+            
+            const isFirstTurn = !originalBoard[7 * 15 + 7];
+            if (isFirstTurn && !placedSet.has(7 * 15 + 7)) return { error: "La primera palabra debe cruzar la estrella (★)." };
+            if (isFirstTurn && placedTiles.length < 2) return { error: "La primera palabra debe tener al menos 2 letras." };
+
+            const rows = [...new Set(placedTiles.map(t => Math.floor(t.index / 15)))];
+            const cols = [...new Set(placedTiles.map(t => t.index % 15))];
+            if (rows.length > 1 && cols.length > 1) return { error: "Las letras deben estar en una sola línea recta." };
+
+            let mainDr = 0, mainDc = 1;
+            if (rows.length > 1) { mainDr = 1; mainDc = 0; }
+            else if (cols.length > 1) { mainDr = 0; mainDc = 1; }
+            else if (placedTiles.length === 1) {
+                const idx = placedTiles[0].index;
+                const r = Math.floor(idx / 15), c = idx % 15;
+                const hasH = (c > 0 && originalBoard[idx - 1]) || (c < 14 && originalBoard[idx + 1]);
+                const hasV = (r > 0 && originalBoard[idx - 15]) || (r < 14 && originalBoard[idx + 15]);
+                if (hasH && !hasV) { mainDr = 0; mainDc = 1; }
+                else if (hasV && !hasH) { mainDr = 1; mainDc = 0; }
+            }
+
+            const minR = Math.min(...placedTiles.map(t => Math.floor(t.index / 15)));
+            const maxR = Math.max(...placedTiles.map(t => Math.floor(t.index / 15)));
+            const minC = Math.min(...placedTiles.map(t => t.index % 15));
+            const maxC = Math.max(...placedTiles.map(t => t.index % 15));
+
+            if (mainDr === 0) {
+                for (let c = minC; c <= maxC; c++) if (!board[minR * 15 + c]) return { error: "Hay huecos en la palabra." };
+            } else {
+                for (let r = minR; r <= maxR; r++) if (!board[r * 15 + minC]) return { error: "Hay huecos en la palabra." };
+            }
+
+            if (!isFirstTurn) {
+                let isConnected = false;
+                for (let t of placedTiles) {
+                const r = Math.floor(t.index / 15), c = t.index % 15;
+                if ((r > 0 && originalBoard[(r - 1) * 15 + c]) || (r < 14 && originalBoard[(r + 1) * 15 + c]) ||
+                    (c > 0 && originalBoard[r * 15 + (c - 1)]) || (c < 14 && originalBoard[r * 15 + (c + 1)])) {
+                    isConnected = true; break;
+                }
+                }
+                if (!isConnected) return { error: "Debes conectar tus letras a las ya existentes." };
+            }
+
+            const wordsToScore = [];
+            const startIdx = placedTiles[0].index;
+            
+            if (placedTiles.length === 1) {
+                const hWord = getWordAt(startIdx, 0, 1, board, placedSet);
+                const vWord = getWordAt(startIdx, 1, 0, board, placedSet);
+                if (hWord) wordsToScore.push(hWord);
+                if (vWord) wordsToScore.push(vWord);
+            } else {
+                const mainWord = getWordAt(startIdx, mainDr, mainDc, board, placedSet);
+                if (mainWord) wordsToScore.push(mainWord);
+                const crossDr = mainDr === 0 ? 1 : 0, crossDc = mainDc === 0 ? 1 : 0;
+                for (let t of placedTiles) {
+                const cross = getWordAt(t.index, crossDr, crossDc, board, placedSet);
+                if (cross) wordsToScore.push(cross);
+                }
+            }
+            if (wordsToScore.length === 0) return { error: "No se formó ninguna palabra válida." };
+
+            let totalScore = 0;
+            for (let w of wordsToScore) {
+                let wScore = 0, wMult = 1;
+                for (let cell of w) {
+                let lScore = cell.val;
+                if (cell.isNew) {
+                    const type = getBoardType(cell.index);
+                    if (type === 'DL') lScore *= 2;
+                    if (type === 'TL') lScore *= 3;
+                    if (type === 'DW' || type === '★') wMult *= 2;
+                    if (type === 'TW') wMult *= 3;
+                }
+                wScore += lScore;
+                }
+                totalScore += (wScore * wMult);
+            }
+            if (placedTiles.length === 7) totalScore += 50; 
+            return { score: totalScore, valid: true, text: wordsToScore[0].map(c=>c.char).join('') };
+        }
+
+        // --- COMPONENTE FICHA ---
+        const Tile = ({ char, val, onClick, selected, isBoard, isNew }) => (
+            <div onClick={onClick} className={`
+                ${isBoard ? 'w-full h-full text-[10px] sm:text-xs' : 'w-10 h-10 sm:w-12 sm:h-12 text-lg sm:text-xl'}
+                relative rounded flex items-center justify-center cursor-pointer select-none transition-transform
+                ${selected ? 'ring-4 ring-blue-500 scale-110 z-10 shadow-lg' : 'tile-shadow'}
+                ${isNew ? 'bg-yellow-100 border-b-[3px] border-r-[3px] border-yellow-300' : 'bg-amber-50 border-b-[3px] border-r-[3px] border-amber-200'}
+            `}>
+                <span className="font-black text-gray-800">{val === 0 ? (char !== '*' ? char : '') : char}</span>
+                {val > 0 && <span className={`absolute bottom-0 right-0.5 font-bold text-gray-600 ${isBoard ? 'text-[7px]' : 'text-[10px]'}`}>{val}</span>}
+            </div>
+        );
+
+        // --- LÓGICA DE TABLERO Y MULTIJUGADOR ---
+        function GameBoard({ roomId, user, goHome }) {
+            const [roomData, setRoomData] = useState(null);
+            const [placedTiles, setPlacedTiles] = useState([]);
+            const [selectedTileId, setSelectedTileId] = useState(null);
+            const [pendingBlank, setPendingBlank] = useState(null);
+            const [rackOrder, setRackOrder] = useState([]);
+            const [playValidation, setPlayValidation] = useState({ score: 0, valid: false, text: '', error: '' });
+            const [shufflesLeft, setShufflesLeft] = useState(3);
+            const { doc, updateDoc, onSnapshot } = window.FirebaseAPI;
+
+            // Reiniciar contador de mezclas al cambiar de turno
+            useEffect(() => {
+                if (roomData && roomData.turnUid === user.uid) {
+                    setShufflesLeft(3);
+                }
+            }, [roomData?.turnUid, user.uid]);
+
+            // Actualizar vista previa de la puntuación en tiempo real
+            useEffect(() => {
+                if (placedTiles.length > 0 && roomData) {
+                    setPlayValidation(validateAndScore(placedTiles, roomData.board));
+                } else {
+                    setPlayValidation({ score: 0, valid: false, text: '', error: '' });
+                }
+            }, [placedTiles, roomData]);
+
+            useEffect(() => {
+                const roomRef = doc(db, 'rooms', roomId);
+                const unsub = onSnapshot(roomRef, async (snap) => {
+                    if (!snap.exists()) return goHome();
+                    const data = snap.data();
+                    
+                    if (!data.playerUids.includes(user.uid)) {
+                        if (data.playerUids.length < 2) {
+                            const allBag = [...data.bag];
+                            const myRack = allBag.splice(0, 7);
+                            await updateDoc(roomRef, {
+                                status: 'playing', playerUids: [...data.playerUids, user.uid],
+                                [`players.${user.uid}`]: { name: "Jugador 2", score: 0, rack: myRack },
+                                bag: allBag
+                            });
+                        } else {
+                            alert("La sala está llena"); goHome();
+                        }
+                    } else {
+                        setRoomData(data);
+                        const currentIds = data.players[user.uid]?.rack.map(t => t.id) || [];
+                        setRackOrder(prev => {
+                            const filtered = prev.filter(id => currentIds.includes(id));
+                            const newIds = currentIds.filter(id => !filtered.includes(id));
+                            return [...filtered, ...newIds];
+                        });
+                    }
+                });
+                return () => unsub();
+            }, [roomId, user]);
+
+            if (!roomData) return <div className="h-screen flex items-center justify-center font-bold text-xl">Conectando con tu amigo...</div>;
+
+            const isMyTurn = roomData.turnUid === user.uid && roomData.status === 'playing';
+            const myData = roomData.players[user.uid];
+            const opponentUid = roomData.playerUids.find(id => id !== user.uid);
+            const oppData = opponentUid ? roomData.players[opponentUid] : null;
+
+            const availableRack = rackOrder.map(id => myData.rack.find(t => t.id === id)).filter(Boolean).filter(t => !placedTiles.some(pt => pt.id === t.id));
+
+            const handleCellClick = (index) => {
+                if (pendingBlank || !isMyTurn) return;
+                const committed = roomData.board[index];
+                const placedIdx = placedTiles.findIndex(t => t.index === index);
+                
+                if (placedIdx !== -1) {
+                    setPlacedTiles(prev => prev.filter((_, i) => i !== placedIdx));
+                    setSelectedTileId(null);
+                    return;
+                }
+                if (committed) return;
+                
+                if (selectedTileId) {
+                    const tile = myData.rack.find(t => t.id === selectedTileId);
+                    if (tile.val === 0) { setPendingBlank({ id: tile.id, index }); return; }
+                    setPlacedTiles(prev => [...prev, { id: tile.id, index, char: tile.char, val: tile.val }]);
+                    setSelectedTileId(null);
+                }
+            };
+
+            const resolveBlank = (char) => {
+                setPlacedTiles(prev => [...prev, { id: pendingBlank.id, index: pendingBlank.index, char, val: 0 }]);
+                setSelectedTileId(null); setPendingBlank(null);
+            };
+
+            const copyInvite = () => {
+                const url = `${window.location.origin}${window.location.pathname}#${roomId}`;
+                navigator.clipboard.writeText(url).then(() => alert("¡Enlace copiado! Pásaselo a tu amigo.")).catch(() => alert("Copia este código y dáselo a tu amigo: " + roomId));
+            };
+
+            const handlePass = async () => {
+                if (!isMyTurn) return;
+                await updateDoc(doc(db, 'rooms', roomId), {
+                    turnUid: opponentUid || user.uid
+                });
+                setPlacedTiles([]);
+            };
+
+            const handlePlay = async () => {
+                if (placedTiles.length === 0) return;
+                
+                if (playValidation.error) {
+                    alert(playValidation.error);
+                    return;
+                }
+                
+                const newBoard = [...roomData.board];
+                placedTiles.forEach(t => { 
+                    newBoard[t.index] = { char: t.char, val: t.val };
+                });
+
+                const allBag = [...roomData.bag];
+                let newRack = availableRack;
+                while(newRack.length < 7 && allBag.length > 0) newRack.push(allBag.pop());
+
+                await updateDoc(doc(db, 'rooms', roomId), {
+                    board: newBoard, bag: allBag, turnUid: opponentUid || user.uid,
+                    status: (newRack.length === 0 && allBag.length === 0) ? 'finished' : 'playing',
+                    [`players.${user.uid}.score`]: myData.score + playValidation.score,
+                    [`players.${user.uid}.rack`]: newRack
+                });
+                setPlacedTiles([]);
+            };
+
+            return (
+                <div className="flex flex-col h-screen bg-slate-50 text-slate-800">
+                    {/* Cabecera Puntos */}
+                    <div className="flex justify-between items-center bg-white px-4 py-3 shadow z-10 shrink-0">
+                        <div className={`text-center ${isMyTurn ? 'text-green-600 font-bold' : 'text-slate-400'}`}>
+                            <div className="text-xs">TÚ</div>
+                            <div className="text-2xl leading-none">{myData.score}</div>
+                        </div>
+                        <div className="flex flex-col items-center bg-slate-100 rounded-full px-4 py-1">
+                            <span className="text-[10px] font-bold text-slate-400">LETRAS</span>
+                            <span className="text-sm font-black">{roomData.bag.length}</span>
+                        </div>
+                        {oppData ? (
+                            <div className={`text-center ${!isMyTurn ? 'text-green-600 font-bold' : 'text-slate-400'}`}>
+                                <div className="text-xs">AMIGO</div>
+                                <div className="text-2xl leading-none">{oppData.score}</div>
+                            </div>
+                        ) : (
+                            <div className="text-xs text-slate-400 w-16 text-center">Esperando...</div>
+                        )}
+                    </div>
+
+                    {/* Tablero (Ahora permite Zoom y Desplazamiento) */}
+                    <div className="flex-1 flex overflow-auto bg-[#e2e8f0] p-4 relative items-start justify-center">
+                        <div className="w-[800px] h-[800px] sm:w-[600px] sm:h-[600px] shrink-0 grid bg-[#f1f5f9] border border-slate-300 shadow-xl rounded-sm" style={{ gridTemplateColumns: 'repeat(15, 1fr)' }}>
+                            {Array(225).fill(null).map((_, i) => {
+                                const type = BOARD_LAYOUT[Math.floor(i / 15)][i % 15];
+                                
+                                // Colores suavizados "anti-vértigo"
+                                let bg = 'bg-[#f8fafc] border border-slate-200/60';
+                                if (type === 'TW') bg = 'bg-red-400/60 border-red-500/40';
+                                if (type === 'DW' || type === '★') bg = 'bg-pink-300/60 border-pink-400/40';
+                                if (type === 'TL') bg = 'bg-blue-400/60 border-blue-500/40';
+                                if (type === 'DL') bg = 'bg-cyan-200/60 border-cyan-300/40';
+
+                                const committed = roomData.board[i];
+                                const placed = placedTiles.find(t => t.index === i);
+
+                                return (
+                                    <div key={i} className={`flex justify-center items-center relative ${bg}`} onClick={() => handleCellClick(i)}>
+                                        {!committed && !placed && type !== '.' && <span className="text-[10px] font-bold text-black/20 select-none">{type}</span>}
+                                        {committed && <Tile char={committed.char} val={committed.val} isBoard />}
+                                        {placed && <Tile char={placed.char} val={placed.val} isBoard isNew />}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        
+                        {/* Selector Comodín */}
+                        {pendingBlank && (
+                            <div className="absolute inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+                                <div className="bg-white p-4 rounded-xl w-full max-w-sm">
+                                    <h3 className="text-center font-bold mb-4">Elige letra para el comodín</h3>
+                                    <div className="flex flex-wrap gap-2 justify-center">
+                                        {"ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split('').map(c => (
+                                            <button key={c} onClick={() => resolveBlank(c)} className="w-10 h-10 bg-amber-100 rounded font-bold">{c}</button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Controles y Atril */}
+                    <div className="bg-slate-800 p-4 pb-6 shrink-0 rounded-t-2xl shadow-[0_-5px_15px_rgba(0,0,0,0.2)] z-20">
+                        {!oppData && (
+                            <button onClick={copyInvite} className="w-full mb-4 bg-blue-600/20 border border-blue-500 text-blue-300 py-2 rounded-lg font-bold">
+                                📋 Copiar Enlace de Invitación
+                            </button>
+                        )}
+                        
+                        {/* Vista previa de puntuación en vivo */}
+                        <div className="flex justify-between items-center h-6 mb-2 px-2 text-sm">
+                            <span className="text-red-400 font-bold">{playValidation.error ? playValidation.error : ''}</span>
+                            {!playValidation.error && playValidation.text && (
+                                <>
+                                    <span className="text-slate-300">Palabra: <span className="text-white font-bold">{playValidation.text}</span></span>
+                                    <span className="text-green-400 font-black text-lg">+{playValidation.score} pts</span>
+                                </>
+                            )}
+                        </div>
+                        
+                        <div className="flex justify-center gap-1 sm:gap-2 mb-4 h-12">
+                            {availableRack.map(t => (
+                                <Tile key={t.id} char={t.val===0?'*':t.char} val={t.val} onClick={() => setSelectedTileId(prev => prev === t.id ? null : t.id)} selected={selectedTileId === t.id} />
+                            ))}
+                            {Array(7 - availableRack.length).fill(0).map((_, i) => (
+                                <div key={i} className="w-10 h-10 sm:w-12 sm:h-12 bg-white/10 rounded border border-white/5" />
+                            ))}
+                        </div>
+                        
+                        <div className="flex gap-2 w-full max-w-md mx-auto">
+                            <button onClick={() => {
+                                if (shufflesLeft > 0) {
+                                    setRackOrder(prev => [...prev].sort(() => Math.random() - 0.5));
+                                    setShufflesLeft(prev => prev - 1);
+                                }
+                            }} disabled={shufflesLeft === 0} className="flex-1 bg-slate-600 disabled:bg-slate-800 disabled:opacity-50 text-white rounded-xl p-2 flex flex-col items-center justify-center leading-none" title="Mezclar Atril">
+                                <span className="text-lg">🔀</span>
+                                <span className="text-[10px] mt-1 font-bold">({shufflesLeft})</span>
+                            </button>
+                            <button onClick={() => setPlacedTiles([])} className="flex-1 bg-slate-600 text-white rounded-xl p-2 flex justify-center items-center text-lg" title="Recuperar fichas del tablero">
+                                🔄
+                            </button>
+                            <button onClick={handlePass} disabled={!isMyTurn} className="flex-1 bg-amber-500 disabled:bg-slate-700 text-white font-bold rounded-xl p-2 text-xs sm:text-sm transition shadow-md">
+                                PASAR
+                            </button>
+                            <button onClick={handlePlay} disabled={!isMyTurn || placedTiles.length === 0} className="flex-[2] bg-green-500 disabled:bg-slate-700 text-white font-black rounded-xl p-2 uppercase tracking-wide text-xs sm:text-sm transition shadow-md">
+                                JUGAR ▶️
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- APLICACIÓN PRINCIPAL ---
+        function App() {
+            const [firebaseReady, setFirebaseReady] = useState(false);
+            const [user, setUser] = useState(null);
+            const [roomId, setRoomId] = useState(window.location.hash.slice(1));
+            const [joinCode, setJoinCode] = useState('');
+
+            useEffect(() => {
+                const init = () => {
+                    const { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, getFirestore } = window.FirebaseAPI;
+                    try {
+                        app = initializeApp(firebaseConfig);
+                        auth = getAuth(app);
+                        db = getFirestore(app);
+                        signInAnonymously(auth);
+                        onAuthStateChanged(auth, u => { setUser(u); setFirebaseReady(true); });
+                    } catch(e) { console.error("Error Firebase. ¿Pusiste tus claves?", e); }
+                };
+
+                if (window.FirebaseAPI) init();
+                else window.addEventListener('firebase-loaded', init);
+                
+                const handleHash = () => setRoomId(window.location.hash.slice(1));
+                window.addEventListener('hashchange', handleHash);
+                return () => window.removeEventListener('hashchange', handleHash);
+            }, []);
+
+            const createRoom = async () => {
+                if (!user) return alert("Conectando...");
+                const { doc, setDoc } = window.FirebaseAPI;
+                const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+                const bag = createBag();
+                const myRack = bag.splice(0, 7);
+                await setDoc(doc(db, 'rooms', code), {
+                    id: code, status: 'waiting', playerUids: [user.uid], turnUid: user.uid,
+                    board: Array(225).fill(null), bag: bag,
+                    players: { [user.uid]: { name: "Jugador 1", score: 0, rack: myRack } }
+                });
+                window.location.hash = code;
+            };
+
+            if (!firebaseReady) return <div className="h-screen flex items-center justify-center font-bold text-slate-500">Cargando sistema...</div>;
+            if (roomId) return <GameBoard roomId={roomId} user={user} goHome={() => window.location.hash = ''} />;
+
+            return (
+                <div className="h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-blue-50 to-indigo-100">
+                    <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-sm text-center">
+                        <h1 className="text-4xl font-black text-blue-600 mb-8">CruzaPalabras</h1>
+                        
+                        <button onClick={createRoom} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg mb-6 transition">
+                            Crear Partida Nueva
+                        </button>
+                        
+                        <div className="flex items-center gap-2 mb-6">
+                            <div className="h-px bg-slate-200 flex-1"></div>
+                            <span className="text-xs font-bold text-slate-400">O ÚNETE CON UN CÓDIGO</span>
+                            <div className="h-px bg-slate-200 flex-1"></div>
+                        </div>
+
+                        <input 
+                            value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} maxLength={5}
+                            placeholder="Ej. X5TZ" className="w-full text-center bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3 font-black text-2xl mb-3 outline-none"
+                        />
+                        <button onClick={() => { if(joinCode) window.location.hash = joinCode; }} disabled={!joinCode} className="w-full bg-slate-800 disabled:bg-slate-400 text-white font-bold py-4 rounded-xl transition">
+                            Entrar a la sala
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

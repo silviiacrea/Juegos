@@ -222,15 +222,14 @@
         }
 
         // --- COMPONENTE FICHA ---
-        const Tile = ({ char, val, onClick, selected, isBoard, isNew, draggable, onDragStart }) => (
+        const Tile = ({ char, val, selected, isBoard, isNew, draggable, onDragStart }) => (
             <div 
                 draggable={draggable}
                 onDragStart={onDragStart}
-                onClick={onClick} 
                 className={`
                 ${isBoard ? 'w-full h-full text-[10px] sm:text-xs' : 'w-10 h-10 sm:w-12 sm:h-12 text-lg sm:text-xl'}
-                relative rounded flex items-center justify-center cursor-pointer select-none transition-transform
-                ${selected ? 'ring-4 ring-blue-500 scale-110 z-10 shadow-lg' : 'tile-shadow'}
+                relative rounded flex items-center justify-center cursor-grab active:cursor-grabbing select-none transition-transform
+                ${selected ? 'ring-4 ring-blue-500 scale-110 z-10 shadow-lg' : 'tile-shadow hover:scale-105'}
                 ${isNew ? 'bg-[#e0c38c] border-b-[3px] border-r-[3px] border-[#c2a671] text-[#2c1c14]' : 'bg-[#d2b48c] border-b-[3px] border-r-[3px] border-[#b59975] text-[#3e2723]'}
             `}>
                 <span className="font-black">{val === 0 ? (char !== '*' ? char : '') : char}</span>
@@ -242,7 +241,6 @@
         function GameBoard({ roomId, user, goHome, playerName }) {
             const [roomData, setRoomData] = useState(null);
             const [placedTiles, setPlacedTiles] = useState([]);
-            const [selectedTileId, setSelectedTileId] = useState(null);
             const [pendingBlank, setPendingBlank] = useState(null);
             const [rackOrder, setRackOrder] = useState([]);
             const [playValidation, setPlayValidation] = useState({ score: 0, valid: false, text: '', error: '' });
@@ -306,29 +304,9 @@
 
             const availableRack = rackOrder.map(id => myData.rack.find(t => t.id === id)).filter(Boolean).filter(t => !placedTiles.some(pt => pt.id === t.id));
 
-            const handleCellClick = (index) => {
-                if (pendingBlank || !isMyTurn) return;
-                const committed = roomData.board[index];
-                const placedIdx = placedTiles.findIndex(t => t.index === index);
-                
-                if (placedIdx !== -1) {
-                    setPlacedTiles(prev => prev.filter((_, i) => i !== placedIdx));
-                    setSelectedTileId(null);
-                    return;
-                }
-                if (committed) return;
-                
-                if (selectedTileId) {
-                    const tile = myData.rack.find(t => t.id === selectedTileId);
-                    if (tile.val === 0) { setPendingBlank({ id: tile.id, index }); return; }
-                    setPlacedTiles(prev => [...prev, { id: tile.id, index, char: tile.char, val: tile.val }]);
-                    setSelectedTileId(null);
-                }
-            };
-
             const resolveBlank = (char) => {
                 setPlacedTiles(prev => [...prev, { id: pendingBlank.id, index: pendingBlank.index, char, val: 0 }]);
-                setSelectedTileId(null); setPendingBlank(null);
+                setPendingBlank(null);
             };
 
             // --- Lógica de Arrastrar y Soltar (Drag & Drop) ---
@@ -349,15 +327,14 @@
 
                 if (fromIndex !== "") {
                     // Mover ficha ya colocada
-                    setPlacedTiles(prev => prev.map(t => t.id === tileId ? { ...t, index } : t));
+                    setPlacedTiles(prev => prev.map(t => t.id === tileId ? { ...t, index: parseInt(index) } : t));
                 } else {
                     // Mover ficha desde el atril
                     const tile = myData.rack.find(t => t.id === tileId);
                     if (!tile) return;
-                    if (tile.val === 0) { setPendingBlank({ id: tile.id, index }); return; }
-                    setPlacedTiles(prev => [...prev, { id: tile.id, index, char: tile.char, val: tile.val }]);
+                    if (tile.val === 0) { setPendingBlank({ id: tile.id, index: parseInt(index) }); return; }
+                    setPlacedTiles(prev => [...prev, { id: tile.id, index: parseInt(index), char: tile.char, val: tile.val }]);
                 }
-                setSelectedTileId(null);
             };
 
             const handleRackDrop = (e) => {
@@ -443,7 +420,13 @@
                         
                         <div className="flex-1 overflow-auto p-4 flex items-center justify-center">
                             <div 
-                                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.15s ease-out' }}
+                                style={{ 
+                                    transform: `scale(${zoom})`, 
+                                    transformOrigin: 'center center', 
+                                    transition: 'transform 0.15s ease-out',
+                                    gridTemplateColumns: 'repeat(15, 1fr)',
+                                    gridTemplateRows: 'repeat(15, 1fr)'
+                                }}
                                 className="w-[800px] h-[800px] sm:w-[600px] sm:h-[600px] shrink-0 grid bg-[#242430] border border-[#3b3b4a] shadow-2xl rounded-sm" 
                             >
                                 {Array(225).fill(null).map((_, i) => {
@@ -463,7 +446,6 @@
                                         <div 
                                             key={i} 
                                             className={`flex justify-center items-center relative ${bg}`} 
-                                            onClick={() => handleCellClick(i)}
                                             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
                                             onDrop={(e) => handleDrop(e, i)}
                                         >
@@ -494,7 +476,7 @@
                     {/* Controles y Atril (Dark Cozy) */}
                     <div 
                         className="bg-[#1a1a24] p-4 pb-6 shrink-0 rounded-t-2xl shadow-[0_-5px_15px_rgba(0,0,0,0.5)] z-20 border-t border-[#2b2b36]"
-                        onDragOver={(e) => e.preventDefault()}
+                        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
                         onDrop={handleRackDrop}
                     >
                         {!oppData && (
@@ -518,10 +500,8 @@
                             {availableRack.map(t => (
                                 <Tile 
                                     key={t.id} char={t.val===0?'*':t.char} val={t.val} 
-                                    onClick={() => setSelectedTileId(prev => prev === t.id ? null : t.id)} 
-                                    selected={selectedTileId === t.id}
                                     draggable={isMyTurn}
-                                    onDragStart={(e) => handleDragStart(e, t.id)}
+                                    onDragStart={(e) => handleDragStart(e, t.id, "")}
                                 />
                             ))}
                             {Array(7 - availableRack.length).fill(0).map((_, i) => (
